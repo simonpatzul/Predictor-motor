@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lab 4 · Codo en vivo</title>
+<style>
+:root {
+  --bg: #f4f5f7; --panel: #ffffff; --ink: #1c1f24; --muted: #6b7280; --line: #e3e6ea; --grid: #eceef1;
+  --accent: #2563eb; --danger: #dc2626; --ok: #16a34a;
+  --c-med: #6b7280; --c-lu: #ea7317; --c-ka: #2563eb; --c-ref: #dc2626; --c-art: #111827; --c-u: #7c3aed;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111317; --panel: #1a1d23; --ink: #e8eaed; --muted: #9aa1ab; --line: #2b3038; --grid: #242830;
+          --accent: #60a5fa; --c-med: #9aa1ab; --c-lu: #fb923c; --c-ka: #60a5fa; --c-ref: #f87171; --c-art: #f3f4f6; --c-u: #a78bfa; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.4 system-ui, sans-serif; }
+header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+.pill { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--grid); color: var(--muted); }
+.pill.on { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+.pill.run { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+main { display: grid; grid-template-columns: 320px 1fr; gap: 12px; padding: 12px 16px; }
+@media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+aside { display: flex; flex-direction: column; gap: 12px; }
+.row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+button { font: inherit; padding: 6px 12px; border-radius: 7px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+input[type=number], input[type=text] { font: inherit; padding: 5px 7px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); width: 100%; }
+input[type=range] { width: 100%; }
+label { font-size: 12px; color: var(--muted); display: block; }
+.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.big { display: flex; align-items: baseline; gap: 8px; }
+.big input { font-size: 22px; font-weight: 600; width: 120px; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; }
+.readout { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.readout div { background: var(--bg); border-radius: 7px; padding: 6px 8px; }
+.readout b { display: block; font-size: 17px; }
+.readout span { font-size: 11px; color: var(--muted); }
+#log { height: 150px; overflow: auto; font-size: 12px; white-space: pre-wrap; color: var(--muted); }
+.plots { display: grid; grid-template-rows: repeat(5, minmax(130px, 1fr)); gap: 8px; height: calc(100vh - 80px); min-height: 760px; }
+.plot { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 6px 8px 4px; display: flex; flex-direction: column; }
+.plot .ttl { display: flex; gap: 12px; font-size: 12px; color: var(--muted); align-items: center; }
+.plot .ttl strong { color: var(--ink); font-weight: 600; }
+.sw { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+.plot canvas { flex: 1; width: 100%; min-height: 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Lab 4 · Control de posición del codo</h1>
+  <span id="conex" class="pill">sin conexión</span>
+  <span id="corre" class="pill">detenido</span>
+  <span style="flex:1"></span>
+  <label style="display:flex;gap:6px;align-items:center">ventana
+    <select id="ventana"><option value="5">5 s</option><option value="10" selected>10 s</option><option value="30">30 s</option><option value="0">todo</option></select>
+  </label>
+</header>
+<main>
+  <aside>
+    <section class="card">
+      <h2>Preparación</h2>
+      <div class="row">
+        <button id="bHome">Home</button>
+        <button id="bEstado">Estado</button>
+        <button id="bStop" class="danger">Stop</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Setpoint de ángulo</h2>
+      <div class="big">
+        <input id="ref" type="number" class="mono" step="0.05" min="0.15" max="2.5" value="1.00">
+        <span class="mono">rad</span>
+        <span id="refDeg" class="mono" style="color:var(--muted)">57.3°</span>
+      </div>
+      <input id="refSl" type="range" min="0.15" max="2.5" step="0.01" value="1.00">
+      <div class="row" style="margin:6px 0 10px">
+        <button data-ref="0.5">0.5</button><button data-ref="1.0">1.0</button>
+        <button data-ref="1.5">1.5</button><button data-ref="2.0">2.0</button>
+      </div>
+      <div class="row">
+        <button id="bIr" class="primary" style="flex:1">Ir</button>
+        <button id="bFin">Terminar</button>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin:8px 0 0">Si no hay corrida, <b>Ir</b> arranca <span class="mono">pos</span>. Mientras corre, manda la nueva referencia en vivo (<span class="mono">r REF</span>). Enter también sirve.</p>
+    </section>
+
+    <section class="card">
+      <h2>PID discreto (Ts = 10 ms)</h2>
+      <p class="mono" style="font-size:12px;margin:0 0 6px">C(z) = (q0 z² + q1 z + q2) / ((z − 1)(z + g))</p>
+      <div class="grid4">
+        <div><label>q0</label><input id="q0" type="number" class="mono" step="any"></div>
+        <div><label>q1</label><input id="q1" type="number" class="mono" step="any"></div>
+        <div><label>q2</label><input id="q2" type="number" class="mono" step="any"></div>
+        <div><label>g</label><input id="g" type="number" class="mono" step="any"></div>
+      </div>
+      <div class="grid4" style="margin-top:6px;grid-template-columns:1fr 2fr 1fr">
+        <div><label>Vmax V</label><input id="vm" type="number" class="mono" step="0.5" value="6"></div>
+        <div><label>Duración máx. (s)</label><input id="dur" type="number" class="mono" step="5" min="1" max="120" value="60"></div>
+        <div><label>&nbsp;</label><button id="bPid" title="Volver a los de sim/pid_discreto.py">Diseño</button></div>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin:8px 0 0">Coeficientes de <span class="mono">sim/pid_discreto.py</span> (polos en z). Se aplican al arrancar una corrida nueva.</p>
+    </section>
+
+    <section class="card">
+      <h2>En vivo</h2>
+      <div class="readout mono">
+        <div><b id="vArt">–</b><span>ángulo (rad)</span></div>
+        <div><b id="vErr">–</b><span>error (mrad)</span></div>
+        <div><b id="vU">–</b><span>u (V)</span></div>
+        <div><b id="vIK">–</b><span>i Kalman (A)</span></div>
+        <div><b id="vIL">–</b><span>i Luenberger (A)</span></div>
+        <div><b id="vW">–</b><span>w motor (rad/s)</span></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Comando manual</h2>
+      <div class="row"><input id="raw" type="text" class="mono" placeholder="step 6 1.0  |  perfil 4 0.3 -4 0.3"><button id="bRaw">Enviar</button></div>
+      <div id="log" class="mono" style="margin-top:8px"></div>
+    </section>
+  </aside>
+
+  <section class="plots">
+    <div class="plot"><div class="ttl"><strong>Ángulo del codo (rad)</strong>
+      <span><i class="sw" style="background:var(--c-art)"></i>medido</span><span><i class="sw" style="background:var(--c-ref)"></i>referencia</span><span><i class="sw" style="background:var(--c-lu)"></i>ref. filtrada</span></div><canvas id="pAng"></canvas></div>
+    <div class="plot"><div class="ttl"><strong>Velocidad del motor (rad/s)</strong>
+      <span><i class="sw" style="background:var(--c-med)"></i>medida</span><span><i class="sw" style="background:var(--c-lu)"></i>Luenberger</span><span><i class="sw" style="background:var(--c-ka)"></i>Kalman</span></div><canvas id="pW"></canvas></div>
+    <div class="plot"><div class="ttl"><strong>Corriente estimada (A)</strong>
+      <span><i class="sw" style="background:var(--c-lu)"></i>Luenberger</span><span><i class="sw" style="background:var(--c-ka)"></i>Kalman</span></div><canvas id="pI"></canvas></div>
+    <div class="plot"><div class="ttl"><strong>Voltaje aplicado (V)</strong>
+      <span><i class="sw" style="background:var(--c-u)"></i>u</span></div><canvas id="pU"></canvas></div>
+    <div class="plot"><div class="ttl"><strong>Traza de P del Kalman</strong>
+      <span><i class="sw" style="background:var(--c-ka)"></i>√(P₁₁² + P₂₂²)</span><span id="vTr" class="mono"></span></div><canvas id="pP"></canvas></div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+// ---------- datos de la corrida actual ----------
+let cols = [], D = {}, corriendo = false;
+function nuevaCorrida(hdr) {
+  cols = hdr.split(','); D = {}; cols.forEach(c => D[c] = []);
+  corriendo = true; estadoCorrida();
+}
+function agregar(l) {
+  const v = l.split(',').map(Number);
+  if (v.length !== cols.length || v.some(isNaN)) return;
+  cols.forEach((c, i) => D[c].push(v[i]));
+}
+
+// ---------- gráficas en canvas ----------
+const PLOTS = [
+  { id: 'pAng', series: [['ref', '--c-ref', [6, 4]], ['rf', '--c-lu', [2, 3]], ['art', '--c-art']] },
+  { id: 'pW',   series: [['w', '--c-med'], ['wL', '--c-lu'], ['wK', '--c-ka']] },
+  { id: 'pI',   series: [['iL', '--c-lu'], ['iK', '--c-ka']] },
+  { id: 'pU',   series: [['u', '--c-u']], fija: [-12, 12] },
+  { id: 'pP',   series: [['trP', '--c-ka']] },
+];
+function nice(lo, hi) {
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  const paso = Math.pow(10, Math.floor(Math.log10((hi - lo) / 4)));
+  const st = [1, 2, 5, 10].map(m => m * paso).find(s => (hi - lo) / s <= 6);
+  return { lo, hi, st };
+}
+function dibujar(p) {
+  const cv = $(p.id), dpr = devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  if (cv.width !== W * dpr || cv.height !== H * dpr) { cv.width = W * dpr; cv.height = H * dpr; }
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  const L = 48, R = 8, T = 6, B = 18, pw = W - L - R, ph = H - T - B;
+  const t = D.t || [], n = t.length;
+  const win = +$('ventana').value;
+  const tEnd = n ? t[n - 1] : 1, tIni = win && tEnd > win ? tEnd - win : 0, tFin = win ? Math.max(tEnd, tIni + win) : Math.max(tEnd, 1);
+  let i0 = 0; while (i0 < n && t[i0] < tIni) i0++;
+  let lo = Infinity, hi = -Infinity;
+  for (const [k] of p.series) { const a = D[k]; if (!a) continue; for (let i = i0; i < n; i++) { if (a[i] < lo) lo = a[i]; if (a[i] > hi) hi = a[i]; } }
+  if (!isFinite(lo)) { lo = p.fija ? p.fija[0] : 0; hi = p.fija ? p.fija[1] : 1; }
+  if (p.id === 'pU') { lo = Math.min(lo, -1); hi = Math.max(hi, 1); }
+  const y = nice(lo, hi);
+  const X = v => L + (v - tIni) / (tFin - tIni) * pw, Y = v => T + (1 - (v - y.lo) / (y.hi - y.lo)) * ph;
+  g.font = '11px ui-monospace, monospace'; g.fillStyle = css('--muted'); g.strokeStyle = css('--grid'); g.lineWidth = 1;
+  g.textAlign = 'right'; g.textBaseline = 'middle';
+  for (let v = Math.ceil(y.lo / y.st) * y.st; v <= y.hi; v += y.st) {
+    const yy = Math.round(Y(v)) + .5; g.beginPath(); g.moveTo(L, yy); g.lineTo(W - R, yy); g.stroke();
+    g.fillText(+v.toFixed(4) + '', L - 5, yy);
+  }
+  const xs = nice(tIni, tFin).st; g.textAlign = 'center'; g.textBaseline = 'top';
+  for (let v = Math.ceil(tIni / xs) * xs; v <= tFin; v += xs) {
+    const xx = Math.round(X(v)) + .5; g.beginPath(); g.moveTo(xx, T); g.lineTo(xx, T + ph); g.stroke();
+    g.fillText(+v.toFixed(2) + ' s', xx, T + ph + 3);
+  }
+  g.save(); g.beginPath(); g.rect(L, T, pw, ph); g.clip();
+  for (const [k, c, dash] of p.series) {
+    const a = D[k]; if (!a || n - i0 < 2) continue;
+    g.strokeStyle = css(c); g.lineWidth = 1.6; g.setLineDash(dash || []);
+    g.beginPath(); for (let i = i0; i < n; i++) { const xx = X(t[i]), yy = Y(a[i]); i === i0 ? g.moveTo(xx, yy) : g.lineTo(xx, yy); } g.stroke();
+  }
+  g.restore(); g.setLineDash([]);
+}
+let sucio = true;
+function bucle() {
+  if (sucio) { PLOTS.forEach(dibujar); lecturas(); sucio = false; }
+  requestAnimationFrame(bucle);
+}
+addEventListener('resize', () => sucio = true);
+$('ventana').onchange = () => sucio = true;
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => sucio = true);
+
+function lecturas() {
+  const n = (D.t || []).length; if (!n) return;
+  const u = k => D[k] ? D[k][n - 1] : NaN, f = (v, d) => isNaN(v) ? '–' : v.toFixed(d);
+  $('vArt').textContent = f(u('art'), 3);
+  $('vErr').textContent = D.ref ? f((u('ref') - u('art')) * 1000, 1) : '–';   // contra la referencia pedida
+  $('vU').textContent = f(u('u'), 2); $('vIK').textContent = f(u('iK'), 3);
+  $('vIL').textContent = f(u('iL'), 3); $('vW').textContent = f(u('w'), 1);
+  $('vTr').textContent = D.trP ? 'actual ' + f(u('trP'), 3) : '';
+}
+
+// ---------- mensajes ----------
+function log(m) { const el = $('log'); el.textContent += m + '\n'; el.scrollTop = el.scrollHeight; }
+function estadoCorrida() { const e = $('corre'); e.textContent = corriendo ? 'corriendo' : 'detenido'; e.className = 'pill' + (corriendo ? ' run' : ''); }
+function linea(l) {
+  if (l.startsWith('t,')) { nuevaCorrida(l); return; }
+  if (l.startsWith('#')) {
+    log(l);
+    if (l.startsWith('# fin')) { corriendo = false; estadoCorrida(); }
+    if (l.startsWith('# conectado')) { $('conex').textContent = 'Pico conectada'; $('conex').className = 'pill on'; }
+    if (l.startsWith('# desconectado')) { $('conex').textContent = 'sin conexión'; $('conex').className = 'pill'; corriendo = false; estadoCorrida(); }
+    return;
+  }
+  if (cols.length) { agregar(l); sucio = true; }
+}
+const es = new EventSource('/eventos');
+es.onmessage = e => e.data.split('\n').forEach(linea);
+es.onerror = () => { $('conex').textContent = 'servidor caído'; $('conex').className = 'pill'; };
+
+async function cmd(c) {
+  log('> ' + c);
+  const r = await fetch('/cmd', { method: 'POST', body: c }).catch(() => null);
+  if (!r || !r.ok) log('# no se pudo enviar: ' + (r ? await r.text() : 'servidor caído'));
+}
+
+// ---------- controles ----------
+function setRef(v) {
+  v = Math.min(2.5, Math.max(0.15, +v || 0.15));
+  $('ref').value = v.toFixed(2); $('refSl').value = v; $('refDeg').textContent = (v * 180 / Math.PI).toFixed(1) + '°';
+}
+function ir() {
+  setRef($('ref').value);
+  const r = (+$('ref').value).toFixed(3);
+  if (corriendo) cmd('r ' + r);
+  else cmd(['pos', r, $('dur').value, $('vm').value, $('q0').value, $('q1').value, $('q2').value, $('g').value].join(' '));
+}
+$('ref').addEventListener('input', () => setRef($('ref').value));
+$('ref').addEventListener('keydown', e => { if (e.key === 'Enter') ir(); });
+$('refSl').addEventListener('input', () => setRef($('refSl').value));
+$('refSl').addEventListener('change', () => { if (corriendo) ir(); });
+document.querySelectorAll('[data-ref]').forEach(b => b.onclick = () => { setRef(b.dataset.ref); ir(); });
+$('bIr').onclick = ir;
+$('bFin').onclick = () => cmd('x');
+$('bHome').onclick = () => cmd('home');
+$('bEstado').onclick = () => cmd('estado');
+$('bStop').onclick = () => { if (corriendo) cmd('x'); setTimeout(() => cmd('stop'), 300); };
+$('bRaw').onclick = () => { const c = $('raw').value.trim(); if (c) cmd(c); };
+$('raw').addEventListener('keydown', e => { if (e.key === 'Enter') $('bRaw').click(); });
+async function cargarPid() {
+  const p = await fetch('/pid').then(r => r.json()).catch(() => ({}));
+  for (const k of ['q0', 'q1', 'q2', 'g']) if (k in p) $(k).value = p[k];
+}
+$('bPid').onclick = cargarPid;
+cargarPid();
+setRef(1.0);
+requestAnimationFrame(bucle);
+</script>
+</body>
+</html>

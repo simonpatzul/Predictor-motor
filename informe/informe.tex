@@ -1,0 +1,263 @@
+\documentclass[conference,a4paper]{IEEEtran}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{siunitx}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+\lstset{basicstyle=\ttfamily\scriptsize, breaklines=true, frame=single, columns=fullflexible,
+        keywordstyle=\color{blue!60!black}, commentstyle=\color{green!40!black}, language=C++}
+\graphicspath{{figuras/}}
+
+\raggedbottom
+\begin{document}
+
+\title{Implementation of a Luenberger Observer and a Linear Kalman Filter to Estimate the Current and Speed of a DC Motor}
+
+\author{\IEEEauthorblockN{Andrés Ramírez\qquad Simón Patiño\qquad Jeronimo Valencia\\ Jorge Alejandro de Santiago}
+\IEEEauthorblockA{Mechatronics Engineering -- Digital Control\\
+Universidad EIA, Envigado, Colombia}}
+
+\maketitle
+
+\begin{abstract}
+Two discrete state observers, a full-order predictor Luenberger observer and a linear Kalman filter, are designed and implemented to estimate the armature current and the speed of a Pololu 37D \#4753 (50:1) gearmotor, measuring only the speed with an incremental encoder. The parametric model from the previous laboratory is tuned so that it draws \SI{0.2}{A} and reaches the nominal speed at \SI{12}{V}, and it is refined with steps measured on the elbow joint of a SCARA robot. Both observers run on a Raspberry Pi Pico with a \SI{10}{ms} sampling period and are evaluated under steps, reference changes and load disturbances. Both give consistent current estimates; under disturbances the Kalman filter tracks the speed with a \SI{7.8}{rad/s} RMS error, against \SI{34.8}{rad/s} for the Luenberger observer.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Luenberger observer, Kalman filter, DC motor, state space, Raspberry Pi Pico.
+\end{IEEEkeywords}
+
+\section{Introduction}
+In many applications not every variable of a system can be measured, either because no sensor is available or because measuring it is expensive. In a DC motor the speed is easily obtained with an encoder, but the armature current requires an additional sensor. A state observer reconstructs the unmeasured states from the system model, the input and the measured outputs \cite{ogata}.
+
+This work implements the two observers proposed in the laboratory guide \cite{guia,guiaeia}: the Luenberger observer, designed by pole placement with Ackermann's formula, and the linear Kalman filter, designed from the model and measurement uncertainty \cite{welch}. Unlike the guide, which uses a myRIO board and LabVIEW, the implementation runs on a Raspberry Pi Pico driving the elbow motor of a SCARA robot.
+
+\section{Theoretical Framework}
+\subsection{DC Motor Model}
+With the states $x=[i_a\;\;\omega]^T$, the input $u=V_a$ and the measured output $y=\omega$, the motor equations are
+\begin{align}
+\dot{i}_a &= -\frac{R_a}{L_a} i_a - \frac{K_v}{L_a}\omega + \frac{1}{L_a}V_a,\\
+\dot{\omega} &= \frac{K_v}{J} i_a - \frac{\beta}{J}\omega,
+\end{align}
+that is, $\dot{x}=A_c x + B_c u$, $y = Cx$ with
+\begin{equation}
+A_c=\begin{bmatrix}-\frac{R_a}{L_a} & -\frac{K_v}{L_a}\\[2pt] \frac{K_v}{J} & -\frac{\beta}{J}\end{bmatrix},\quad
+B_c=\begin{bmatrix}\frac{1}{L_a}\\[2pt] 0\end{bmatrix},\quad
+C=\begin{bmatrix}0 & 1\end{bmatrix}.
+\end{equation}
+
+\subsection{Discretization}
+With a zero-order hold and sampling period $T_s$:
+\begin{equation}
+A = e^{A_c T_s},\qquad B=\int_0^{T_s} e^{A_c\tau}\,d\tau\, B_c,
+\end{equation}
+\begin{equation}
+x_k = A x_{k-1} + B u_{k-1},\qquad y_k = C x_k .
+\end{equation}
+
+\subsection{Luenberger Observer}
+The full-order predictor observer uses the input and the measurement from the previous sample:
+\begin{equation}
+\hat{x}_k = (A-LC)\hat{x}_{k-1} + L\,y_{k-1} + B\,u_{k-1}.
+\label{eq:luen}
+\end{equation}
+The estimation error evolves as $e_k=(A-LC)e_{k-1}$, so $L$ is chosen to place the eigenvalues of $A-LC$ inside the unit circle. With Ackermann's formula,
+\begin{equation}
+L = \Phi(A)\,\mathcal{O}^{-1}\begin{bmatrix}0\\1\end{bmatrix},\qquad \mathcal{O}=\begin{bmatrix}C\\CA\end{bmatrix},
+\end{equation}
+where $\Phi(z)$ is the desired characteristic polynomial.
+
+\subsection{Linear Kalman Filter}
+Starting from $\hat{x}_0$ and $P_0$, each sample performs a prediction and a correction \cite{welch}:
+\begin{align}
+\hat{x}_k^- &= A\hat{x}_{k-1}^+ + B u_{k-1}, & P_k^- &= A P_{k-1}^+ A^T + Q,\\
+K_k &= P_k^- C^T (C P_k^- C^T + R)^{-1}, & &\\
+\hat{x}_k^+ &= \hat{x}_k^- + K_k(y_k - C\hat{x}_k^-), & P_k^+ &= (I-K_kC)P_k^- ,
+\end{align}
+where $Q$ represents the model uncertainty and $R$ the measurement variance.
+
+\section{Experimental Setup}
+The elbow motor of a SCARA RRP robot is used: a \SI{12}{V} Pololu 37D \#4753 gearmotor with a 50:1 gearbox \cite{pololu}, which drives the forearm through a 3:1 pulley. The Hall encoder gives 64 counts per revolution of the motor shaft. The speed is computed as the position difference between two samples divided by $T_s$, so its resolution is $2\pi/(64\,T_s)\approx\SI{9.8}{rad/s}$. The motor is driven by a BTS7960 H-bridge with a \SI{20}{kHz} PWM from a Raspberry Pi Pico, which reads the encoder with a PIO state machine.
+
+The firmware runs a loop every $T_s=\SI{10}{ms}$ that measures the speed, updates both observers and applies the experiment voltage; the data are sent over USB and a Python script stores and plots them. Since the elbow has a limited travel (about \SI{3.7}{rad}), the firmware homes against the limit switch, cuts the voltage before either end of travel and stops the motor if it stalls. The shoulder and the prismatic axis are kept braked.
+
+\section{Motor Model}
+\subsection{Laboratory 1 Model}
+The previous parametric identification gave the parameters in the Lab~1 column of Table~\ref{tab:param}, with an armature resistance of \SI{72.7}{\ohm}. With that model the motor reaches \SI{0.084}{A} and \SI{558}{rad/s} (\SI{107}{rpm} at the output) at \SI{12}{V}, far from the \SI{0.2}{A} and \SI{200}{rpm} specified by the manufacturer. $K_v$ and $\beta$ were consistent with the datasheet, but $R_a$ was about 30 times larger than the value derived from the stall current (\SI{5.5}{A} at \SI{12}{V}).
+
+\subsection{Model Tuning}
+$R_a$ was set to $12/5.5 = \SI{2.18}{\ohm}$, and the two steady-state conditions of the guide were imposed, $i_a=\SI{0.2}{A}$ and $\omega=\omega_{nom}=\SI{1047}{rad/s}$ (\SI{10000}{rpm} at the motor shaft), which gives
+\begin{equation}
+K_v=\frac{12-R_a\,i_a}{\omega_{nom}},\qquad \beta = \frac{K_v\, i_a}{\omega_{nom}}.
+\end{equation}
+$J$ and $L_a$ were then fitted by least squares to reproduce three steps of 4, 6 and \SI{8}{V} measured on the elbow. The resulting $J$ includes the forearm inertia reflected to the motor shaft. Table~\ref{tab:param} summarizes the parameters.
+
+\begin{table}[!t]
+\centering
+\caption{Motor Parameters}
+\label{tab:param}
+\begin{tabular}{lcc}
+\toprule
+Parameter & Lab 1 & Tuned \\
+\midrule
+$R_a$ (\si{\ohm}) & 72.7 & 2.18 \\
+$L_a$ (\si{H}) & \num{6.62e-2} & \num{5.56e-4} \\
+$K_v$ (\si{V.s/rad}) & \num{1.06e-2} & \num{1.104e-2} \\
+$J$ (\si{kg.m^2}) & \num{8.55e-7} & \num{2.81e-6} \\
+$\beta$ (\si{N.m.s}) & \num{1.59e-6} & \num{2.11e-6} \\
+\midrule
+$i_a$ at \SI{12}{V} (\si{A}) & 0.084 & 0.200 \\
+$\omega$ at \SI{12}{V} (\si{rad/s}) & 558 & 1047 \\
+$\tau_{mech}$ (\si{ms}) & 273 & 48 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+With these values,
+\begin{equation}
+A_c=\begin{bmatrix}-3924.1 & -19.86\\ 3935.3 & -0.752\end{bmatrix},\quad B_c=\begin{bmatrix}1798.6\\0\end{bmatrix},
+\end{equation}
+and with $T_s=\SI{10}{ms}$,
+\begin{equation}
+A=\begin{bmatrix}-0.00419 & -0.00415\\ 0.8233 & 0.8166\end{bmatrix},\quad B=\begin{bmatrix}0.3793\\ 15.991\end{bmatrix}.
+\end{equation}
+The discrete plant poles are $z\approx0$ (electrical mode, $\tau_e=L_a/R_a\approx\SI{0.25}{ms}\ll T_s$) and $z=0.812$ (mechanical mode). Fig.~\ref{fig:nominal} verifies the nominal condition and Fig.~\ref{fig:ajuste} compares the model with the data.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{nominal.pdf}
+\caption{Response of the tuned model to \SI{12}{V}: the current settles at \SI{0.2}{A} and the speed at \SI{1047}{rad/s}.}
+\label{fig:nominal}
+\end{figure}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{ajuste.pdf}
+\caption{Steps of 4, 6 and \SI{8}{V} measured on the elbow, compared with the Lab 1 model (dotted) and with the tuned model (dashed).}
+\label{fig:ajuste}
+\end{figure}
+
+The tuned model reproduces the measured time constant, but overestimates the speed by about \SI{40}{rad/s} at \SI{4}{V}. The measured steady-state speeds (305, 496 and \SI{687}{rad/s}) grow by about \SI{96}{rad/s} per volt, and extrapolated to \SI{12}{V} they give $\approx\SI{1070}{rad/s}$, close to the nominal speed. However, the line does not pass through the origin: there is a dead zone of about \SI{0.8}{V} caused by the dry friction of the gearbox and the arm, which a linear model cannot represent.
+
+\section{Observer Design}
+\subsection{Luenberger}
+The observability matrix $\mathcal{O}=[C;\,CA]$ has rank 2, so the system is observable from the speed measurement alone. The initial design, with poles at $z=0.3$ and $0.4$, produced negative current estimates down to \SI{-3.5}{A} with the real data (Fig.~\ref{fig:polos}). The reason is that the electrical pole of the plant is already at $z\approx0$: moving it to $0.3$ makes the current mode of the observer slower than that of the plant, and the small model error (the friction) accumulates in the current. The poles $z=\{0,\;0.2\}$ were therefore chosen, which keep the electrical pole and speed up the mechanical one, giving
+\begin{equation}
+\Phi(z)=z^2-0.2z,\qquad L=\begin{bmatrix}-0.00312\\ 0.6124\end{bmatrix}.
+\end{equation}
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{polos.pdf}
+\caption{Estimated current with the data of the \SI{6}{V} step: with the poles $\{0.3,0.4\}$ the Luenberger observer gives negative currents; with $\{0,0.2\}$ it matches the Kalman filter.}
+\label{fig:polos}
+\end{figure}
+
+\subsection{Kalman}
+The measurement variance was taken from the steady-state data of the steps, between 26 and \SI{45}{(rad/s)^2}, and $R=35$ was used. For the model, an uncertainty of \SI{10}{mA} in the current and \SI{10}{rad/s} in the speed was assumed, and the initial estimate was given a larger uncertainty in the current, which is not measured:
+\begin{equation}
+Q=\begin{bmatrix}10^{-4} & 0\\ 0 & 100\end{bmatrix},\quad P_0=\begin{bmatrix}0.1 & 0\\ 0 & 100\end{bmatrix}.
+\end{equation}
+The gain converges to $K=[-5.98\times10^{-4}\;\;0.771]^T$. No retuning was needed with these values.
+
+\section{Implementation}
+The matrices are computed in Python and written to a header file that the firmware compiles. Since $C=[0\;1]$, the innovation is a scalar and the Kalman filter needs no matrix inversion. The Luenberger observer step is:
+\begin{lstlisting}
+// x(k) = (A - L C) x(k-1) + L y(k-1) + B u(k-1)
+float e  = y_ant - x[1];
+float x0 = AD[0]*x[0] + AD[1]*x[1] + BD[0]*u_ant + LG[0]*e;
+float x1 = AD[2]*x[0] + AD[3]*x[1] + BD[1]*u_ant + LG[1]*e;
+\end{lstlisting}
+and the Kalman filter correction:
+\begin{lstlisting}
+float s  = Pm[3] + RK;            // C P- C' + R
+float K0 = Pm[1]/s, K1 = Pm[3]/s; // gain
+float e  = y - x1;                // innovation
+x[0] = x0 + K0*e;  x[1] = x1 + K1*e;
+\end{lstlisting}
+The \SI{10}{ms} loop includes the measurement, both observers, the actuation and the data transmission.
+
+\section{Results}
+\subsection{Simulation with Measured Data}
+Before the implementation, both observers were run on the measured steps with the same algorithm as the firmware (Fig.~\ref{fig:sim}). Over the three steps the speed RMS error was 12--14~rad/s for Luenberger and 2.6--3.1~rad/s for Kalman. The estimated steady-state currents agreed between both methods (0.27, 0.23 and \SI{0.19}{A} at 4, 6 and \SI{8}{V}).
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{simulacion.pdf}
+\caption{Simulation of the observers on the measured \SI{8}{V} step.}
+\label{fig:sim}
+\end{figure}
+
+\subsection{Implementation on the Pico}
+Fig.~\ref{fig:escalon} shows a \SI{5}{V} step estimated in real time. Both observers follow the measured speed, and the estimated current shows the start-up peak (\SI{1.9}{A}), settles at \SI{\approx0.25}{A} and becomes negative during braking.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{real_escalon.pdf}
+\caption{Implementation on the Pico: \SI{5}{V} step for \SI{1}{s}.}
+\label{fig:escalon}
+\end{figure}
+
+Under reference changes of 4, 8, 3, $-6$ and \SI{-3}{V} (Fig.~\ref{fig:perfil}), the observers follow the speed in every segment, including the direction reversal. The estimated current shows a peak at each reference change and reaches \SI{-3}{A} when the direction reverses, which is the expected behavior of a DC motor.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{real_perfil.pdf}
+\caption{Reference changes: 4, 8, 3, $-6$, $-3$ and \SI{0}{V}.}
+\label{fig:perfil}
+\end{figure}
+
+For the disturbance test, the elbow moves back and forth at $\pm\SI{3.5}{V}$ for \SI{6}{s}, reversing at 0.5 and \SI{1.4}{rad}, while the forearm is braked by hand (Fig.~\ref{fig:pert}). Each time the load is applied, the measured speed drops and the estimated current rises from \SI{\approx0.4}{A} to 1.0--\SI{1.3}{A}. That value approaches the stall current at \SI{3.5}{V} ($3.5/R_a\approx\SI{1.6}{A}$). Table~\ref{tab:rms} summarizes the errors.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{real_perturbacion.pdf}
+\caption{Disturbance: the elbow moves back and forth at $\pm\SI{3.5}{V}$ and is braked by hand three times.}
+\label{fig:pert}
+\end{figure}
+
+\begin{table}[!t]
+\centering
+\caption{RMS Error of the Estimated Speed (\si{rad/s})}
+\label{tab:rms}
+\begin{tabular}{lcc}
+\toprule
+Test & Luenberger & Kalman \\
+\midrule
+4, 6 and \SI{8}{V} steps (simulation) & 12--14 & 2.6--3.1 \\
+Load disturbance (Pico) & 34.8 & 7.8 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Discussion}
+Tuning the model was necessary: the Lab~1 model did not meet the nominal condition because its armature resistance was about 30 times larger than expected. By fixing $K_v$ and $\beta$ from the steady-state conditions and fitting only $J$ and $L_a$, the model meets the manufacturer's specification and reproduces the measured dynamics. The remaining error is due to dry friction, which is not linear.
+
+For the Luenberger observer, the choice of poles turned out to be decisive. With $T_s=\SI{10}{ms}$ the electrical mode of the plant is practically instantaneous, and an observer pole far from $z=0$ makes the current estimate very sensitive to model errors. The Kalman filter, on the other hand, computes its gain from $Q$ and $R$ without choosing poles by hand, and it behaved well from the first design.
+
+With the motor braked, the estimated speed does not reach zero (Fig.~\ref{fig:pert}): neither model includes the load torque, so the observer expects the motor to turn whenever voltage is applied. Kalman suffers less from this bias because its gain on the speed ($0.77$) gives more weight to the measurement. A natural improvement would be to add the load torque as a third state.
+
+A limitation of the setup also appeared in practice: when the direction was reversed with the motor at high speed, the current peak and the energy returned by the motor shut down the power supply. The experiments were therefore limited to reversals of $\pm\SI{6}{V}$ or less in the middle of the elbow travel.
+
+\section{Conclusions}
+\begin{itemize}
+\item With a single speed measurement, both observers reconstruct the armature current consistently, in steady state, in transients and under load.
+\item Under disturbances, the Kalman filter tracks the speed about four times better than the Luenberger observer (7.8 versus \SI{34.8}{rad/s} RMS) and filters the encoder quantization noise.
+\item The Luenberger design depends on the chosen poles. Modes much faster than the sampling period should be kept at $z\approx0$.
+\item The Raspberry Pi Pico runs both observers and the data acquisition in a \SI{10}{ms} loop without difficulty, which makes it a low-cost alternative to the myRIO board.
+\end{itemize}
+
+\begin{thebibliography}{9}
+\bibitem{guia} M. Giraldo, ``Laboratory 4: State observers and estimators,'' Digital Control, Universidad EIA, 2026.
+\bibitem{guiaeia} J. Cossio, S. Neumann and M. A. Giraldo, ``Guía práctica para la implementación de observadores de estado discretos,'' Universidad EIA.
+\bibitem{pololu} Pololu Corporation, ``37D Metal Gearmotors,'' datasheet, rev. 1.2.
+\bibitem{ogata} K. Ogata, \emph{Modern Control Engineering}, 5th ed. Prentice Hall, 2010.
+\bibitem{welch} G. Welch and G. Bishop, ``An introduction to the Kalman filter,'' UNC Chapel Hill, 1995.
+\end{thebibliography}
+
+\end{document}
