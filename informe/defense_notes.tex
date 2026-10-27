@@ -1,0 +1,67 @@
+\documentclass[9pt,a4paper,twocolumn]{extarticle}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[english]{babel}
+\usepackage[margin=1.4cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\setlength{\columnsep}{0.6cm}
+\setlist{nosep,leftmargin=1.1em}
+\titleformat{\section}{\normalsize\bfseries}{}{0pt}{}
+\titlespacing*{\section}{0pt}{6pt}{2pt}
+\newcommand{\q}[1]{\par\smallskip\noindent\textbf{Q: #1}\par\noindent}
+\pagestyle{empty}
+\begin{document}
+
+\twocolumn[\begin{center}\large\bfseries Lab 4 -- Defense Notes: Observers, Kalman Filter and Discrete Position Control\end{center}\vspace{2pt}]
+
+\section{1. Model}
+\q{Why did the Lab 1 model have to be tuned?}
+Its $R_a=72.7\,\Omega$ gave 0.084 A and 107 rpm at 12 V instead of 0.2 A and 200 rpm. $R_a$ was set from the stall current ($12/5.5=2.18\,\Omega$), $K_v$ and $\beta$ from the two steady-state conditions of the guide, and $J$, $L_a$ by least squares on the 4, 6, 8 V steps.
+\q{Why does the model still overestimate the speed at low voltage?}
+Dry friction: a dead zone of $\approx0.8$ V that a linear model cannot represent.
+\q{Why ZOH and $T_s=10$ ms?}
+The Pico holds the PWM constant between samples, which is exactly a zero-order hold. $z=e^{sT_s}$: electrical mode ($\tau_e=0.25$ ms) $\to z\approx0$; mechanical mode (48 ms) $\to z=0.812$.
+
+\section{2. Luenberger}
+\q{Is the system observable measuring only $\omega$?}
+$\mathcal{O}=[C;CA]=[0\;1;\,0.8233\;0.8166]$, $\det=-0.82\neq0$ $\Rightarrow$ rank 2.
+\q{What does ``predictor'' mean?}
+$\hat{x}_k$ uses $y_{k-1}$ and $u_{k-1}$: $\hat{x}_k=(A-LC)\hat{x}_{k-1}+Ly_{k-1}+Bu_{k-1}$. The error obeys $e_k=(A-LC)e_{k-1}$.
+\q{Why poles $\{0,\,0.2\}$ and not $\{0.3,\,0.4\}$?}
+The plant's electrical pole is already at $z\approx0$. Moving it to 0.3 makes the observer \emph{slower} than the plant, and the model error accumulates in the current ($-3.5$ A estimates). Keep fast modes at $z\approx0$ and only speed up the mechanical one.
+
+\section{3. Kalman}
+\q{Where do $Q$ and $R$ come from?}
+$R=35\,(\mathrm{rad/s})^2$: variance of the measured speed in steady state (26--45). $Q=\mathrm{diag}(10^{-4},100)$: 10 mA and 10 rad/s of model uncertainty. $P_0=\mathrm{diag}(0.1,100)$: larger initial doubt on the unmeasured current.
+\q{What do prediction and correction do?}
+Prediction: the model advances the state and the uncertainty grows ($P^-=APA^T+Q$). Correction: the measurement reduces it ($P^+=(I-KC)P^-$) with $K=P^-C^T/(CP^-C^T+R)$.
+\q{What does $\sqrt{P_{11}^2+P_{22}^2}$ show? Why doesn't it go to 0?}
+It shows convergence: $100\to28.93\to27.06\to26.99$, constant from the 3rd sample. With constant $A$, $Q$, $R$, $P$ follows the Riccati equation to a fixed value independent of the data; it is not zero because model and sensor always have error. To make it vary, $Q$ or $R$ would have to change in time (adaptive filter).
+\q{Why is Kalman better than Luenberger?}
+7.8 vs 34.8 rad/s RMS under load. Its gain comes from $Q,R$ (not hand-picked poles) and its speed gain $0.771$ weights the measurement more, filtering the 9.8 rad/s encoder quantization.
+\q{Why is the estimated speed not zero with the motor braked?}
+Neither model has the load torque: the observer expects the motor to turn whenever voltage is applied. Fix: add the load torque as a third state.
+
+\section{4. Discrete position control (additional)}
+\q{How was it designed in discrete time?}
+Plant $G(z)=5.37{\times}10^{-4}(z+1.029)/((z-1)(z-0.812))$ (ZOH; the electrical pole at $z\approx0$ cancels with a zero at $-0.0012$). Controller $C(z)=(q_0z^2+q_1z+q_2)/((z-1)(z+g))$. Matching $(z-1)(z+g)D+N(q_0z^2+q_1z+q_2)$ with the desired polynomial gives 4 linear equations.
+\q{Where do the poles come from?}
+$\zeta=0.7$, $t_s=0.5$ s $\Rightarrow s=-8\pm j8.16 \Rightarrow z=e^{sT_s}=0.92\pm0.075j$; two extra poles at 0.6.
+\q{Why not cancel the zero at $-1.029$?}
+It is a sampling zero outside the unit circle; cancelling it would create an unstable hidden mode.
+\q{Why the prefilter and the anti-windup?}
+$q_0=140$ V/rad: a 1 rad step asks $>100$ V. Saturated at 6 V the voltage swung $+6\to-6$ V. $F(z)=((1-\alpha)z/(z-\alpha))^2$, $\alpha=0.93$, smooths the reference without moving the closed-loop poles. Storing the saturated $u$ in the difference equation stops the integral from winding up.
+\q{Did the design hold on the robot?}
+27 steps: $t_s=0.74$--0.85 s (design 0.65--0.75), overshoot $<1\%$, mean final error 1.8 mrad. The extra 0.1 s and the few mrad are dry friction.
+\q{Why does the controller hold $\approx2$ V at rest?}
+External torque toward mid-travel (cables). The integral cancels it; the observers read it as current.
+
+\section{5. Implementation}
+\q{What runs where?}
+Pico (10 ms loop): encoder, both observers, PID, PWM, limits, stall cut, shoulder hold (PD in a separate timer). PC: design in Python (headers), web interface only sends commands and plots.
+\q{Why no matrix inversion in Kalman?}
+$C=[0\;1]$ $\Rightarrow$ the innovation is scalar: $K=P^-_{:,2}/(P^-_{22}+R)$.
+
+\end{document}

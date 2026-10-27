@@ -2,6 +2,7 @@
 // La Pico aplica voltaje al motor, mide la velocidad con el encoder y estima corriente y velocidad
 // con los dos observadores cada TS. Todo sale por USB como CSV.
 //
+// El hombro (R2) se sostiene activo en su ángulo de encendido (sostener_hombro) y P queda frenado.
 // Comandos por el puerto serie (terminar con Enter):
 //   home            busca el final de carrera del codo y pone el cero ahí
 //   step V T        aplica V voltios (0 a 12) durante T segundos, se corta solo antes del final del recorrido
@@ -53,6 +54,40 @@ bool home_ok = false;
 
 float ang_motor() { return ENC_SIGN * encoder.count() * 2.0f * float(M_PI) / CUENTAS_MOTOR; }   // rad eje motor
 float ang_artic() { return ang_motor() / RED_ARTIC; }                                            // rad del codo
+
+// --- Sostén activo del hombro (R2) ----------------------------------------------------------
+// El freno solo no basta: la reacción del codo lo hace girar. Un PD en un timer de 10 ms lo
+// mantiene en el ángulo que tenía al encender la Pico, mientras el codo hace cualquier comando.
+// Mismo motor, encoder y polea que el codo (pines y signo como en el firmware del SCARA).
+Encoder encoder_hombro(pio0, 1, 12, 13);
+constexpr float KP_HOMBRO = 30.0f;             // V/rad
+constexpr float KD_HOMBRO = 1.0f;              // V/(rad/s)
+constexpr float V_HOMBRO = 4.0f;               // tope (corriente de bloqueo <= 1.8 A)
+constexpr float TOL_HOMBRO = 0.003f;           // dentro de esta banda (rad) queda solo frenado
+constexpr float FALLA_HOMBRO = 0.15f;          // si se aleja más que esto algo anda mal: se suelta el lazo y queda frenado
+volatile bool hombro_activo = true;
+volatile float hombro_err = 0.0f;
+repeating_timer_t timer_hombro;
+
+float ang_hombro() { return ENC_SIGN * encoder_hombro.count() * 2.0f * float(M_PI) / CUENTAS_MOTOR / RED_ARTIC; }
+
+bool sostener_hombro(repeating_timer_t*) {
+    static float ang_ant = 0.0f;
+    const float ang = ang_hombro();
+    const float w = (ang - ang_ant) / TS;
+    ang_ant = ang;
+    const float e = -ang;                       // objetivo: 0 = donde estaba al encender
+    hombro_err = e;
+    if (fabsf(e) > FALLA_HOMBRO) hombro_activo = false;
+    float u = 0.0f;
+    if (hombro_activo && fabsf(e) > TOL_HOMBRO) {
+        u = KP_HOMBRO * e - KD_HOMBRO * w;
+        if (u > V_HOMBRO) u = V_HOMBRO;
+        if (u < -V_HOMBRO) u = -V_HOMBRO;
+    }
+    freno_hombro.set(u / V_FUENTE);
+    return true;
+}
 
 void aplicar(float v) { driver.set(v / V_FUENTE); }
 
@@ -263,6 +298,8 @@ int main() {
     driver.init();
     limite.init();
     for (MotorDriver* f : {&freno_hombro, &freno_p}) { f->init(); f->set(0.0f); f->enable(true); }
+    encoder_hombro.init();
+    add_repeating_timer_ms(-10, sostener_hombro, nullptr, &timer_hombro);
     char linea[128];
     int n = 0;
     while (true) {
@@ -296,7 +333,8 @@ int main() {
             else printf("# uso: pos REF T [VMAX [Q0 Q1 Q2 G]]\n");
         }
         else if (strcmp(linea, "estado") == 0)
-            printf("# estado: codo %.3f rad, final de carrera %d, home %d\n", ang_artic(), limite.pressed(), home_ok);
+            printf("# estado: codo %.3f rad, final de carrera %d, home %d, hombro %.4f rad%s\n", ang_artic(), limite.pressed(), home_ok,
+                   ang_hombro(), hombro_activo ? " (sostenido)" : " (SUELTO: se alejo mas de 0.15 rad, solo frenado)");
         else if (strcmp(linea, "stop") == 0) { aplicar(0); driver.enable(false); printf("# motor deshabilitado\n"); }
         else if (linea[0]) printf("# comandos: home | step V T | perfil V1 T1 V2 T2 ... | vaiven V T A B | pos REF T [VMAX [Q0 Q1 Q2 G]] | stop | estado\n");
     }
