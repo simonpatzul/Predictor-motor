@@ -109,6 +109,23 @@ label { font-size: 12px; color: var(--muted); display: block; }
     </section>
 
     <section class="card">
+      <h2>Prueba nominal a 12 V</h2>
+      <div class="row">
+        <button id="b12" class="primary" style="flex:1">12 V constante</button>
+        <div style="width:90px"><label>Duración (s)</label><input id="dur12" type="number" class="mono" step="0.1" min="0.2" max="1" value="0.6"></div>
+      </div>
+      <div class="readout mono" style="margin-top:8px">
+        <div><b id="r12rpm">–</b><span>rpm salida medida</span></div>
+        <div><b id="r12rpmK">–</b><span>rpm salida Kalman</span></div>
+        <div><b id="r12w">–</b><span>w motor (rad/s)</span></div>
+        <div><b id="r12iK">–</b><span>i Kalman (A)</span></div>
+        <div><b id="r12iL">–</b><span>i Luenberger (A)</span></div>
+        <div><b id="r12n">–</b><span>muestras estables</span></div>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin:8px 0 0">Esperado (datasheet): <b>200 rpm</b> en la salida y <b>0.2 A</b> sin carga. Promedia las muestras a 12 V después de 0.15 s (3τ). El codo gira ~7 rad/s y se corta solo en 2.6 rad; luego vuelve a 0.25 rad a 3 V. Requiere Home.</p>
+    </section>
+
+    <section class="card">
       <h2>En vivo</h2>
       <div class="readout mono">
         <div><b id="vArt">–</b><span>ángulo (rad)</span></div>
@@ -117,6 +134,7 @@ label { font-size: 12px; color: var(--muted); display: block; }
         <div><b id="vIK">–</b><span>i Kalman (A)</span></div>
         <div><b id="vIL">–</b><span>i Luenberger (A)</span></div>
         <div><b id="vW">–</b><span>w motor (rad/s)</span></div>
+        <div><b id="vRpm">–</b><span>rpm salida</span></div>
       </div>
     </section>
 
@@ -223,6 +241,7 @@ function lecturas() {
   $('vErr').textContent = D.ref ? f((u('ref') - u('art')) * 1000, 1) : '–';   // contra la referencia pedida
   $('vU').textContent = f(u('u'), 2); $('vIK').textContent = f(u('iK'), 3);
   $('vIL').textContent = f(u('iL'), 3); $('vW').textContent = f(u('w'), 1);
+  $('vRpm').textContent = f(u('w') * RPM_SALIDA, 0);
   $('vTr').textContent = D.trP ? 'actual ' + f(u('trP'), 3) : '';
 }
 
@@ -233,7 +252,7 @@ function linea(l) {
   if (l.startsWith('t,')) { nuevaCorrida(l); return; }
   if (l.startsWith('#')) {
     log(l);
-    if (l.startsWith('# fin')) { corriendo = false; estadoCorrida(); }
+    if (l.startsWith('# fin')) { corriendo = false; estadoCorrida(); if (prueba12) resultado12(); }
     if (l.startsWith('# conectado')) { $('conex').textContent = 'Pico conectada'; $('conex').className = 'pill on'; }
     if (l.startsWith('# desconectado')) { $('conex').textContent = 'sin conexión'; $('conex').className = 'pill'; corriendo = false; estadoCorrida(); }
     return;
@@ -271,6 +290,35 @@ $('bFin').onclick = () => cmd('x');
 $('bHome').onclick = () => cmd('home');
 $('bEstado').onclick = () => cmd('estado');
 $('bStop').onclick = () => { if (corriendo) cmd('x'); setTimeout(() => cmd('stop'), 300); };
+// ---------- prueba nominal a 12 V ----------
+const RPM_SALIDA = 60 / (2 * Math.PI) / 50;   // rad/s del motor -> rpm del eje de salida (caja 50:1)
+let prueba12 = false;
+$('b12').onclick = () => {
+  if (corriendo) { log('# termina la corrida actual primero'); return; }
+  const T = Math.min(1, Math.max(0.2, +$('dur12').value || 0.6));
+  if (!confirm('El codo va a girar a 12 V (~7 rad/s) desde su posición hasta 2.6 rad. ¿Brazo libre y Home hecho?')) return;
+  prueba12 = true;
+  ['r12rpm', 'r12rpmK', 'r12w', 'r12iK', 'r12iL', 'r12n'].forEach(k => $(k).textContent = '…');
+  cmd('step 12 ' + T.toFixed(2));
+};
+function resultado12() {
+  prueba12 = false;
+  const t = D.t || [], u = D.u || [];
+  const i0 = u.findIndex(v => v >= 11.9);
+  if (i0 < 0) { log('# no hubo muestras a 12 V (¿falta home?)'); return; }
+  const sel = [];
+  for (let i = i0; i < t.length && u[i] >= 11.9; i++) if (t[i] - t[i0] >= 0.15) sel.push(i);
+  const prom = k => sel.reduce((a, i) => a + D[k][i], 0) / sel.length;
+  if (!sel.length) { log('# muy pocas muestras estables a 12 V'); return; }
+  const w = prom('w'), wK = prom('wK');
+  $('r12rpm').textContent = (w * RPM_SALIDA).toFixed(0);
+  $('r12rpmK').textContent = (wK * RPM_SALIDA).toFixed(0);
+  $('r12w').textContent = w.toFixed(0);
+  $('r12iK').textContent = prom('iK').toFixed(3);
+  $('r12iL').textContent = prom('iL').toFixed(3);
+  $('r12n').textContent = sel.length;
+  log(`# 12 V: ${(w * RPM_SALIDA).toFixed(0)} rpm salida (medida), i Kalman ${prom('iK').toFixed(3)} A, ${sel.length} muestras`);
+}
 $('bRaw').onclick = () => { const c = $('raw').value.trim(); if (c) cmd(c); };
 $('raw').addEventListener('keydown', e => { if (e.key === 'Enter') $('bRaw').click(); });
 async function cargarPid() {
